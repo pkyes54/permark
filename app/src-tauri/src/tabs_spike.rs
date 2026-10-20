@@ -299,7 +299,7 @@ pub fn activate(handle: &AppHandle, to: usize) {
         return;
     };
     let created = t0.elapsed();
-    let shown = new.show();
+    // hide first: on Linux the tabs share a GtkBox, so two visible tabs would split the height for a moment
     let hidden = if from == to {
         Ok(())
     } else {
@@ -307,6 +307,7 @@ pub fn activate(handle: &AppHandle, to: usize) {
             .get_webview(&tab_label(from))
             .map_or(Ok(()), |old| old.hide())
     };
+    let shown = new.show();
     let focused = new.set_focus();
     let titled = window.set_title(&format!("PerMark spike - tab {}", to + 1));
     log(format!(
@@ -417,6 +418,20 @@ fn plan(handle: &AppHandle) {
     ));
     // let the frontends boot + workspaces open
     std::thread::sleep(Duration::from_millis(2500));
+    // the frontend shows its window from requestAnimationFrame; a hidden native window may never paint
+    let window = handle
+        .get_window(WINDOW)
+        .or_else(|| handle.get_window(crate::windows::MAIN));
+    if let Some(window) = window {
+        let visible = window.is_visible().ok();
+        log(format!("window {} visible={visible:?}", window.label()));
+        if visible == Some(false) {
+            log("WARN window still hidden after load: shown from Rust");
+            let _ = window.show();
+            let _ = window.set_focus();
+            std::thread::sleep(Duration::from_millis(1500));
+        }
+    }
     probe(handle, "ready");
     log("MARK READY");
     std::thread::sleep(spike.config.hold);
