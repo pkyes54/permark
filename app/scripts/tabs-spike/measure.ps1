@@ -8,7 +8,9 @@ param(
     [string]$OutDir = (Join-Path $env:TEMP "permark-tabs-spike-results"),
     [string]$Paths = "",
     [int]$Repeat = 1,
-    [int]$TimeoutSec = 120
+    [int]$TimeoutSec = 120,
+    # CI only: sends real key presses (SendKeys) to the spike window. NEVER on a person's desktop.
+    [switch]$Keys
 )
 $ErrorActionPreference = "Stop"
 New-Item -ItemType Directory -Force $OutDir | Out-Null
@@ -65,6 +67,18 @@ function First-Ms([string]$Log, [string]$Pattern) {
     if ($line) { return [int](($line.Line -split " ")[0]) } else { return $null }
 }
 
+if ($Keys) { $configs += , @("keys", 3, 0) }
+
+function Send-SpikeKeys([System.Diagnostics.Process]$Proc) {
+    Add-Type -AssemblyName System.Windows.Forms
+    $wsh = New-Object -ComObject WScript.Shell
+    Write-Host "   keys: activate=$($wsh.AppActivate($Proc.Id))"
+    Start-Sleep -Milliseconds 700
+    foreach ($k in @("^{TAB}", "^{TAB}", "^+{TAB}", "^3", "^1", "abc")) {
+        [System.Windows.Forms.SendKeys]::SendWait($k); Start-Sleep -Milliseconds 1000
+    }
+}
+
 $rows = @()
 for ($r = 1; $r -le $Repeat; $r++) {
     foreach ($c in $configs) {
@@ -76,6 +90,7 @@ for ($r = 1; $r -le $Repeat; $r++) {
         $env:PERMARK_TABS_SPIKE_PLAN = "1"
         $env:PERMARK_TABS_SPIKE_LOG = $log
         $env:PERMARK_TABS_SPIKE_PATHS = $Paths
+        $env:PERMARK_TABS_SPIKE_HOLD_MS = $(if ($name -eq "keys") { "12000" } else { "6000" })
         Write-Host "== $name (run $r)"
         $sw = [System.Diagnostics.Stopwatch]::StartNew()
         $proc = Start-Process -FilePath $Exe -PassThru
@@ -83,6 +98,7 @@ for ($r = 1; $r -le $Repeat; $r++) {
         if (Wait-Mark $log "MARK READY" $proc $TimeoutSec) {
             Start-Sleep -Milliseconds 1500
             $samples += Measure-Tree $proc.Id "ready"
+            if ($name -eq "keys") { Send-SpikeKeys $proc }
             if ($tabs -ge 2 -and (Wait-Mark $log "MARK CYCLED" $proc $TimeoutSec)) {
                 Start-Sleep -Milliseconds 1500
                 $samples += Measure-Tree $proc.Id "cycled"
@@ -109,7 +125,7 @@ for ($r = 1; $r -le $Repeat; $r++) {
         Start-Sleep -Seconds 2
     }
 }
-"PERMARK_TABS_SPIKE", "PERMARK_TABS_SPIKE_LAZY", "PERMARK_TABS_SPIKE_PLAN", "PERMARK_TABS_SPIKE_LOG", "PERMARK_TABS_SPIKE_PATHS" |
+"PERMARK_TABS_SPIKE", "PERMARK_TABS_SPIKE_LAZY", "PERMARK_TABS_SPIKE_PLAN", "PERMARK_TABS_SPIKE_LOG", "PERMARK_TABS_SPIKE_PATHS", "PERMARK_TABS_SPIKE_HOLD_MS" |
     ForEach-Object { Remove-Item "Env:$_" -ErrorAction SilentlyContinue }
 $csv = Join-Path $OutDir "summary.csv"
 $rows | Export-Csv -NoTypeInformation -Path $csv
