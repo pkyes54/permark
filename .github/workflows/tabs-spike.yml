@@ -1,0 +1,64 @@
+name: Tabs spike
+
+# THROWAWAY (feature/tabs-spike): build the child-webview spike on all three OSes and run its scripted plan headless
+# (Linux: xvfb). Logs + RSS summary in the job output and as an artifact.
+
+on:
+  push:
+    branches: ["feature/tabs-spike"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  spike:
+    name: Spike (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-22.04, macos-latest]
+    defaults:
+      run:
+        working-directory: app
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libgtk-3-dev libsoup-3.0-dev libjavascriptcoregtk-4.1-dev xvfb
+      - run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: app/src-tauri
+          key: tabs-spike
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+      - run: npm ci
+      - name: Build spike (debug profile, embedded frontend, no updater)
+        run: npx tauri build --debug --no-bundle --features common -- --no-default-features
+      - name: Run spike plan (Linux, xvfb)
+        if: runner.os == 'Linux'
+        run: xvfb-run -a -s "-screen 0 1920x1080x24" bash scripts/tabs-spike/run.sh src-tauri/target/debug/permark "$RUNNER_TEMP/spike" "$PWD/testdata/edit-corpus;$PWD/testdata/agent-fixture"
+      - name: Run spike plan (macOS)
+        if: runner.os == 'macOS'
+        run: bash scripts/tabs-spike/run.sh src-tauri/target/debug/permark "$RUNNER_TEMP/spike" "$PWD/testdata/edit-corpus;$PWD/testdata/agent-fixture"
+      - name: Run spike plan (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $root = (Get-Location).Path
+          ./scripts/tabs-spike/measure.ps1 -Exe "$root/src-tauri/target/debug/permark.exe" -OutDir "$env:RUNNER_TEMP/spike" -Paths "$root/testdata/edit-corpus;$root/testdata/agent-fixture"
+          Get-ChildItem "$env:RUNNER_TEMP/spike/*.log" | ForEach-Object { "===== $($_.Name)"; Get-Content $_ }
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: spike-${{ matrix.os }}
+          path: ${{ runner.temp }}/spike

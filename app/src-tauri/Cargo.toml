@@ -202,7 +202,7 @@ serde_json.workspace = true
 serde.workspace = true
 thiserror.workspace = true
 ts-rs.workspace = true
-tauri = { version = "2.12", features = [] }
+tauri = { version = "2.12", features = ["unstable"] }
 tauri-plugin-dialog = "2.8.2"
 tauri-plugin-opener = "2.7"
 tauri-plugin-updater = { version = "2.13", optional = true }

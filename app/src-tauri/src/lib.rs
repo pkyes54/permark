@@ -12,6 +12,7 @@ mod plugins;
 mod saver;
 mod shell;
 mod sink;
+mod tabs_spike;
 #[cfg(feature = "plugin-updates")]
 mod updater;
 mod web_pictures;
@@ -76,8 +77,16 @@ fn claim(endpoint: Option<&Endpoint>, request: &OpenRequest) -> Instance {
 /// # Errors
 /// No profile folder; Tauri fails to start.
 pub fn run(request: OpenRequest) -> Result<(), StartError> {
-    let dirs = AppDirs::system().ok_or(StartError::NoProfile)?;
-    let endpoint = Endpoint::app(&dirs).ok();
+    let spike = tabs_spike::active();
+    let dirs = tabs_spike::dirs()
+        .or_else(AppDirs::system)
+        .ok_or(StartError::NoProfile)?;
+    // spike: never forward to | serve as the running PerMark
+    let endpoint = if spike {
+        None
+    } else {
+        Endpoint::app(&dirs).ok()
+    };
     let listening = match claim(endpoint.as_ref(), &request) {
         Instance::Forwarded => return Ok(()),
         Instance::Primary(listening) => listening,
@@ -97,7 +106,18 @@ pub fn run(request: OpenRequest) -> Result<(), StartError> {
     #[cfg(feature = "plugin-updates")]
     let app = app.plugin(tauri_plugin_updater::Builder::new().build());
     let app = app
-        .invoke_handler(commands::handler())
+        .on_page_load(tabs_spike::page_load)
+        .invoke_handler({
+            let main = commands::handler();
+            let spike = tabs_spike::handler();
+            move |invoke| {
+                if invoke.message.command().starts_with("spike_") {
+                    spike(invoke)
+                } else {
+                    main(invoke)
+                }
+            }
+        })
         .setup(move |app| {
             let shell = Shell::new(app.handle().clone(), &dirs);
             app.manage(shell);
@@ -105,8 +125,10 @@ pub fn run(request: OpenRequest) -> Result<(), StartError> {
             if let Some(listening) = listening {
                 shell::state(&handle).serve(listening);
             }
-            windows::create_main(&handle)?;
-            open::first_launch(&handle, request);
+            if !tabs_spike::setup(&handle)? {
+                windows::create_main(&handle)?;
+                open::first_launch(&handle, request);
+            }
             Ok(())
         })
         .build(tauri::generate_context!())?;
@@ -121,6 +143,7 @@ pub fn run(request: OpenRequest) -> Result<(), StartError> {
 }
 
 fn on_window_event(handle: &tauri::AppHandle, label: &str, event: &WindowEvent) {
+    tabs_spike::on_window_event(handle, label, event);
     let shell = shell::state(handle);
     match event {
         WindowEvent::Moved(_) | WindowEvent::Resized(_) => {
